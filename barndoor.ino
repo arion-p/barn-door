@@ -341,7 +341,7 @@ void state_off_exit(void)
 
 // A finite state machine with 3 states - sidereal, highspeed and off
 static State stateSidereal = State(state_sidereal_enter, state_sidereal_update, state_sidereal_exit);
-static State stateHighspeed = State(state_highspeed_enter, state_highspeed_update, state_highspeed_update);
+static State stateHighspeed = State(state_highspeed_enter, state_highspeed_update, state_highspeed_exit);
 static State stateOff = State(state_off_enter, state_off_update, state_off_exit);
 static FSM barndoor = FSM(stateOff);
 
