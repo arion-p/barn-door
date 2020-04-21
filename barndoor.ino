@@ -59,9 +59,9 @@ static const float MAXIMUM_ANGLE = 30;   // Maximum angle to allow barn doors to
 static const int pinOutStep = 9;      // Arduino digital pin connected to EasyDriver step
 static const int pinOutDirection = 8; // Arduino digital pin connected to EasyDriver direction
 
-static const int pinInSidereal = 4;  // Arduino analogue pin connected to sidereal mode switch
-static const int pinInHighspeed = 5; // Arduino analogue pin connected to highspeed mode switch
-static const int pinInDirection = 3; // Arduino analogue pin connected to direction switch
+static const int pinInSidereal = A4;  // Arduino analogue pin connected to sidereal mode switch
+static const int pinInHighspeed = A5; // Arduino analogue pin connected to highspeed mode switch
+static const int pinInDirection = A3; // Arduino analogue pin connected to direction switch
 
 
 // Derived constants
