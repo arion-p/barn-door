@@ -46,16 +46,19 @@
 // should be the only things that you need to change in general
 //
 static const float STEP_SIZE_DEG = 1.8;  // Degrees rotation per step
-static const float MICRO_STEPS = 8;      // Number of microsteps per step
+static const float MICRO_STEPS = 32;      // Number of microsteps per step
 static const float THREADS_PER_CM = 8;   // Number of threads in rod per cm of length
 static const float BASE_LEN_CM = 30.5;   // Length from hinge to center of rod in cm
 static const float INITIAL_ANGLE = 0;    // Initial angle of barn doors when switched on
 static const float MAXIMUM_ANGLE = 30;   // Maximum angle to allow barn doors to open (30 deg == 2 hours)
 
+#define MOTOR_ACCELERATION  1000L    // steps per sec^2 - need to test this
+#define MOTOR_MAX_SPEED     2500L    // steps per sec
+#define MOTOR_SLOW_SPEED        0.05     // cm/sec
+#define MOTOR_VERY_SLOW_SPEED   0.01     // cm/sec
+
 // Nothing below this line should require changing unless your barndoor
 // is not an Isoceles mount, or you changed the electrical circuit design
-
-// Constants to set based on electronic construction specs
 
 // Constants to set based on electronic construction specs
 static const int pinOutStep = 3;      // Arduino digital pin connected to EasyDriver step
@@ -76,7 +79,13 @@ static const int pinInEndLimit = A5;
 
 
 // Derived constants
+static const long MOTOR_USTEPS_ACCELERATION = MOTOR_ACCELERATION * MICRO_STEPS;
+static const long MOTOR_MAX_USTEPS_SPEED = MOTOR_MAX_SPEED * MICRO_STEPS;
+
 static const float USTEPS_PER_ROTATION = 360.0 / STEP_SIZE_DEG * MICRO_STEPS; // usteps per rod rotation
+static const float USTEPS_PER_CM = THREADS_PER_CM * USTEPS_PER_ROTATION;
+static const long MOTOR_SLOW_SPEED_USTEPS = (long)(MOTOR_SLOW_SPEED * USTEPS_PER_CM);
+static const long MOTOR_VERY_SLOW_SPEED_USTEPS = (long)(MOTOR_VERY_SLOW_SPEED * USTEPS_PER_CM);
 
 
 // Standard constants
@@ -313,16 +322,18 @@ void state_highspeed_update(void)
             motor.stop();
             barndoor.trigger(END_SWITCH);
         } else {
-            motor.setSpeed(5000);
-            motor.runSpeed();
+            motor.moveTo(maximumPositionUSteps);
+
+            motor.run();
         }
     } else {
         if (motor.currentPosition() <= 0) {
             motor.stop();
             barndoor.trigger(START_SWITCH);
         } else {
-            motor.setSpeed(-5000);
-            motor.runSpeed();
+            motor.moveTo(0);
+
+            motor.run();
         }
     }
 }
@@ -342,13 +353,50 @@ void state_off_enter(void)
 
 void state_off_update(void)
 {
-    // nada
+    if(motor.isRunning()) {
+        motor.run();
+    } else  {
+        motor.disableOutputs(); // save power by disabling outputs
+    }
 }
 
 void state_off_exit(void)
 {
-    // nada
+    motor.enableOutputs();
+}
+
+
+void auto_home_motor(void) {
+
+    #ifdef DEBUG
+        Serial.print("Auto homing...");
+    #endif
+    // Move motor to home position until Start limit switch is activated
+    motor.setSpeed(-MOTOR_SLOW_SPEED_USTEPS);
+    StartLimit.poll();
+    motor.enableOutputs();
+    while(!StartLimit.on()) {
+        motor.runSpeed();
+        StartLimit.poll();
     }
+
+    #ifdef DEBUG
+        Serial.print("backing up...");
+    #endif
+    // Back up slowly until Start limit switch is released
+    motor.setSpeed(MOTOR_VERY_SLOW_SPEED_USTEPS);
+    while(StartLimit.on()) {
+        motor.runSpeed();
+        StartLimit.poll();
+    }
+
+    // Stop motor. It is now homed
+    motor.stop();
+    motor.setCurrentPosition(0);
+    #ifdef DEBUG
+        Serial.print("done.\n");
+    #endif
+}
 
 void poll_switches(void) {
     StartButton.poll();
@@ -370,8 +418,8 @@ void setup(void)
 {
     motor.setEnablePin(pinOutEnable);
     motor.setPinsInverted(true, false, true);
-
-    motor.setMaxSpeed(3000);
+    motor.setAcceleration(MOTOR_USTEPS_ACCELERATION);
+    motor.setMaxSpeed(MOTOR_MAX_USTEPS_SPEED);
     
     offsetPositionUSteps = angle_to_usteps(INITIAL_ANGLE);
     maximumPositionUSteps = angle_to_usteps(MAXIMUM_ANGLE);
@@ -386,8 +434,9 @@ void setup(void)
     barndoor.add_transition(&stateHighspeed, &stateOff, START_SWITCH, NULL);
     barndoor.add_transition(&stateHighspeed, &stateOff, END_SWITCH, NULL);
 
+    auto_home_motor();
 #ifdef DEBUG
-    Serial.begin(9600);
+    Serial.begin(115200);
 #endif
 }
 
