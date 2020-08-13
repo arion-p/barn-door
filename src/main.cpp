@@ -36,6 +36,8 @@
 #include <AccelStepper.h>
 #include <avdweb_Switch.h>
 
+#define PREFER_SINE
+
 // We don't want to send debug over the serial port by default since
 // it seriously slows down the main loop causing tracking errors
 //#define DEBUG
@@ -48,9 +50,11 @@
 static const float STEP_SIZE_DEG = 1.8;  // Degrees rotation per step
 static const float MICRO_STEPS = 32;      // Number of microsteps per step
 static const float THREADS_PER_CM = 8;   // Number of threads in rod per cm of length
-static const float BASE_LEN_CM = 30.5;   // Length from hinge to center of rod in cm
-static const float INITIAL_ANGLE = 0;    // Initial angle of barn doors when switched on
-static const float MAXIMUM_ANGLE = 30;   // Maximum angle to allow barn doors to open (30 deg == 2 hours)
+static const float BASE_LEN_UPPER_CM = 28.1;    // Length from hinge to center of rod in cm
+static const float BASE_LEN_LOWER_CM = 28;      // Length from hinge to center of rod in cm
+static const float INITIAL_OPENING = 2.1;       // Initial opening of barn doors when switched on 
+                                                // (distance between two pivot points in cm)
+static const float MAXIMUM_OPENING = 16.5;      // Maximum distance to allow barn doors to open (30 deg == 2 hours)
 
 #define MOTOR_ACCELERATION  1000L    // steps per sec^2 - need to test this
 #define MOTOR_MAX_SPEED     2500L    // steps per sec
@@ -88,10 +92,49 @@ static const float USTEPS_PER_CM = THREADS_PER_CM * USTEPS_PER_ROTATION;
 static const long MOTOR_SLOW_SPEED_USTEPS = (long)(MOTOR_SLOW_SPEED * USTEPS_PER_CM);
 static const long MOTOR_VERY_SLOW_SPEED_USTEPS = (long)(MOTOR_VERY_SLOW_SPEED * USTEPS_PER_CM);
 
+// Assuming:
+// d = thread length (between two pivot points)
+// l1 = lower arm length (from hinge axis to lower pivot point axis)
+// l2 = upper arm length (from hinge axis to upper pivot point axis)
+// theta = angle between arms (between two pivot points)
+//
+// then:
+// d^2 = l1^2 + l2^2 - 2 * l1 * l2 * cos(theta) = a * cos(theta) + b
+// where:
+// a = -2 * l1 * l2
+// b = l1^2 + l2^2
+// 
+// Alternate calculation (more accurate because cos() has limited accuracy near 0)
+// Assuming: 
+// theta = 2*phi
+// then:
+// d^2 = l1^2 + l2^2 - 2 * l1 * l2 * cos(2*phi) 
+//     = l1^2 + l2^2 - 2 * l1 * l2 * (1-2*sin^2(phi))
+//     = l1^2 + l2^2 - 2 * l1 * l2 + 4 * l1 * l2 * sin^2(phi)
+//     = (l1 - l2) + 4 * l1 * l2 * sin^2(phi)
+//     = a * sin^2(theta/2) + b
+// where:
+// a = 4 * l1 * l2
+// b = (l1 - l2)^2
 
 // Standard constants
-static const float SIDE_REAL_SECS = 86164.0419; // time in seconds for 1 rotation of earth
+static const float SIDE_REAL_SECS = 86164.0905; // time in seconds for 1 rotation of earth
 
+
+#ifdef PREFER_SINE
+static const float ALPHA = 4 * BASE_LEN_LOWER_CM * BASE_LEN_UPPER_CM;
+static const float BETA = (BASE_LEN_LOWER_CM - BASE_LEN_UPPER_CM) * (BASE_LEN_LOWER_CM - BASE_LEN_UPPER_CM);
+
+static const float LAMBDA = PI / (1000.0 * SIDE_REAL_SECS);         // ms to angle factor
+static const float ALPHA2 = ALPHA * USTEPS_PER_CM * USTEPS_PER_CM;
+static const float BETA2 = BETA * USTEPS_PER_CM * USTEPS_PER_CM;
+
+#else
+static const float ALPHA = -2 * BASE_LEN_LOWER_CM * BASE_LEN_UPPER_CM;
+static const float BETA = BASE_LEN_LOWER_CM * BASE_LEN_LOWER_CM + BASE_LEN_UPPER_CM * BASE_LEN_UPPER_CM;
+
+static const float LAMBDA = 2 * PI / (1000.0 * SIDE_REAL_SECS); // ms to angle factor
+#endif
 
 // Events
 #define START_BUTTON        1
@@ -114,15 +157,52 @@ Switch EndLimit(pinInEndLimit, INPUT_PULLUP, false, 10, 300, 250, 5);
 // Forward declaration
 extern Fsm barndoor;
 
+#ifdef PREFER_SINE
+// Given time offset from the 100% closed position, figure out
+// the total number of steps required to achieve that
+long time_to_usteps(long ms)
+{
+    return (long)(sqrt(ALPHA2 * square(sin(ms * LAMBDA)) + BETA2));
+
+    // return (long)(USTEPS_PER_ROTATION *
+    //               THREADS_PER_CM * 
+    //               sqrt(ALPHA * square(sin(ms * LAMBDA)) + BETA));
+}
+
+// Given total number of steps from 100% closed position, figure out
+// the corresponding total tracking time in seconds
+long usteps_to_time(long usteps)
+{
+    return (long)(
+      asin(sqrt((square(usteps) - BETA2) / ALPHA2)) *
+      1000.0 * SIDE_REAL_SECS / PI);
+    // return (long)(
+    //   asin(sqrt((square(usteps / USTEPS_PER_CM) - BETA) / ALPHA)) *
+    //   1000.0 * SIDE_REAL_SECS / PI);
+}
+#else
+
 // Given time offset from the 100% closed position, figure out
 // the total number of steps required to achieve that
 long time_to_usteps(long ms)
 {
     return (long)(USTEPS_PER_ROTATION *
-                  THREADS_PER_CM * 2.0 * BASE_LEN_CM *
-                  sin(ms * PI / (1000.0 * SIDE_REAL_SECS)));
+                  THREADS_PER_CM * 
+                  sqrt(ALPHA * cos(ms * LAMBDA) + BETA));
+                  //sqrt(ALPHA * cos(ms / 1000.0 * 2 * PI / SIDE_REAL_SECS) + BETA));
+
 }
 
+// Given total number of steps from 100% closed position, figure out
+// the corresponding total tracking time in seconds
+long usteps_to_time(long usteps)
+{
+    return (long)(
+      acos((square(usteps / (USTEPS_PER_ROTATION * THREADS_PER_CM)) - BETA) / ALPHA) *
+      1000.0 * SIDE_REAL_SECS / (2 * PI));
+}
+
+#endif
 
 // Given an angle, figure out the usteps required to get to
 // that point.
@@ -131,14 +211,9 @@ long angle_to_usteps(float angle)
     return time_to_usteps(SIDE_REAL_SECS * 1000.0 / 360.0 * angle);
 }
 
-
-// Given total number of steps from 100% closed position, figure out
-// the corresponding total tracking time in seconds
-long usteps_to_time(long usteps)
+long distance_to_usteps(float distance)
 {
-    return (long)(asin(usteps /
-                       (USTEPS_PER_ROTATION * THREADS_PER_CM * 2.0 * BASE_LEN_CM)) *
-                  1000.0 * SIDE_REAL_SECS / PI);
+    return distance * USTEPS_PER_CM;
 }
 
 // These variables are initialized when the motor switches
@@ -225,7 +300,9 @@ void plan_tracking(void)
     targetPositionUSteps = time_to_usteps(targetPositionMs);
 
 #ifdef DEBUG
-    Serial.print("target pos usteps: ");
+    Serial.print("current pos usteps: ");
+    Serial.print(motor_position());
+    Serial.print(", target pos usteps: ");
     Serial.print(targetPositionUSteps);
     Serial.print(", target pos ms: ");
     Serial.print(targetPositionMs);
@@ -422,8 +499,10 @@ void setup(void)
     motor.setAcceleration(MOTOR_USTEPS_ACCELERATION);
     motor.setMaxSpeed(MOTOR_MAX_USTEPS_SPEED);
     
-    offsetPositionUSteps = angle_to_usteps(INITIAL_ANGLE);
-    maximumPositionUSteps = angle_to_usteps(MAXIMUM_ANGLE);
+    // offsetPositionUSteps = angle_to_usteps(INITIAL_ANGLE);
+    // maximumPositionUSteps = angle_to_usteps(MAXIMUM_ANGLE);
+    offsetPositionUSteps = distance_to_usteps(INITIAL_OPENING);
+    maximumPositionUSteps = distance_to_usteps(MAXIMUM_OPENING);
 
     barndoor.add_transition(&stateOff, &stateSidereal, START_BUTTON, NULL);
     barndoor.add_transition(&stateOff, &stateHighspeed, REWIND_BUTTON, NULL);
