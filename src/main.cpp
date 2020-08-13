@@ -30,11 +30,11 @@
 // Other barndoor drive designs will require different mathematical
 // formulas to correct errors
 
-// http://arduino-info.wikispaces.com/HAL-LibrariesUpdates
-#include <FiniteStateMachine.h>
+#include <Fsm.h>
 
 // http://www.airspayce.com/mikem/arduino/AccelStepper/
 #include <AccelStepper.h>
+#include <avdweb_Switch.h>
 
 // We don't want to send debug over the serial port by default since
 // it seriously slows down the main loop causing tracking errors
@@ -56,12 +56,23 @@ static const float MAXIMUM_ANGLE = 30;   // Maximum angle to allow barn doors to
 // is not an Isoceles mount, or you changed the electrical circuit design
 
 // Constants to set based on electronic construction specs
-static const int pinOutStep = 9;      // Arduino digital pin connected to EasyDriver step
-static const int pinOutDirection = 8; // Arduino digital pin connected to EasyDriver direction
 
-static const int pinInSidereal = A4;  // Arduino analogue pin connected to sidereal mode switch
-static const int pinInHighspeed = A5; // Arduino analogue pin connected to highspeed mode switch
-static const int pinInDirection = A3; // Arduino analogue pin connected to direction switch
+// Constants to set based on electronic construction specs
+static const int pinOutStep = 3;      // Arduino digital pin connected to EasyDriver step
+static const int pinOutDirection = 2; // Arduino digital pin connected to EasyDriver direction
+static const int pinOutEnable = 4; // Arduino digital pin connected to EasyDriver enable
+
+static const int pinInStart = A0;  
+static const int pinInStop = A1; 
+static const int pinInRewind = A2; 
+static const int pinInDirection = A3; 
+#ifdef PRO_MINI
+static const int pinInStartLimit = A6;
+static const int pinInEndLimit = A7;
+#else
+static const int pinInStartLimit = A4;
+static const int pinInEndLimit = A5;
+#endif
 
 
 // Derived constants
@@ -72,10 +83,26 @@ static const float USTEPS_PER_ROTATION = 360.0 / STEP_SIZE_DEG * MICRO_STEPS; //
 static const float SIDE_REAL_SECS = 86164.0419; // time in seconds for 1 rotation of earth
 
 
+// Events
+#define START_BUTTON        1
+#define REWIND_BUTTON       2
+#define STOP_BUTTON         3
+#define END_SWITCH          4
+#define START_SWITCH        5
+
 // Setup motor class with parameters targetting an EasyDriver board
 static AccelStepper motor(AccelStepper::DRIVER,
                           pinOutStep,
                           pinOutDirection);
+
+Switch StartButton(pinInStart);
+Switch StopButton(pinInStop);
+Switch RewindButton(pinInRewind);
+Switch StartLimit(pinInStartLimit, INPUT_PULLUP, false, 10, 300, 250, 5);
+Switch EndLimit(pinInEndLimit, INPUT_PULLUP, false, 10, 300, 250, 5);
+
+// Forward declaration
+extern Fsm barndoor;
 
 // Given time offset from the 100% closed position, figure out
 // the total number of steps required to achieve that
@@ -134,24 +161,6 @@ static long targetPositionSecs;
 // Total motor steps associated with target point
 static long targetPositionUSteps;
 
-
-// Global initialization when first turned off
-void setup(void)
-{
-    pinMode(pinInSidereal, OUTPUT);
-    pinMode(pinInHighspeed, OUTPUT);
-    pinMode(pinInDirection, OUTPUT);
-
-    motor.setPinsInverted(true, false, false);
-    motor.setMaxSpeed(3000);
-
-    offsetPositionUSteps = angle_to_usteps(INITIAL_ANGLE);
-    maximumPositionUSteps = angle_to_usteps(MAXIMUM_ANGLE);
-
-#ifdef DEBUG
-    Serial.begin(9600);
-#endif
-}
 
 
 // The logical motor position which takes into account the
@@ -299,9 +308,10 @@ void state_highspeed_update(void)
 {
     // pinInDirection is a 2-position switch for choosing direction
     // of motion
-    if (analogRead(pinInDirection) < 512) {
+    if (digitalRead(pinInDirection)) {
         if (motor_position() >= maximumPositionUSteps) {
             motor.stop();
+            barndoor.trigger(END_SWITCH);
         } else {
             motor.setSpeed(5000);
             motor.runSpeed();
@@ -309,6 +319,7 @@ void state_highspeed_update(void)
     } else {
         if (motor.currentPosition() <= 0) {
             motor.stop();
+            barndoor.trigger(START_SWITCH);
         } else {
             motor.setSpeed(-5000);
             motor.runSpeed();
@@ -337,29 +348,74 @@ void state_off_update(void)
 void state_off_exit(void)
 {
     // nada
+    }
+
+void poll_switches(void) {
+    StartButton.poll();
+    StopButton.poll();
+    RewindButton.poll();
+    StartLimit.poll();
+    EndLimit.poll();
 }
 
-// A finite state machine with 3 states - sidereal, highspeed and off
-static State stateSidereal = State(state_sidereal_enter, state_sidereal_update, state_sidereal_exit);
-static State stateHighspeed = State(state_highspeed_enter, state_highspeed_update, state_highspeed_exit);
-static State stateOff = State(state_off_enter, state_off_update, state_off_exit);
-static FSM barndoor = FSM(stateOff);
 
+// A finite state machine with 3 states - sidereal, highspeed and off
+static State stateSidereal(state_sidereal_enter, state_sidereal_update, state_sidereal_exit);
+static State stateHighspeed(state_highspeed_enter, state_highspeed_update, state_highspeed_exit);
+static State stateOff(state_off_enter, state_off_update, state_off_exit);
+Fsm barndoor(&stateOff);
+
+// Global initialization when first turned off
+void setup(void)
+{
+    motor.setEnablePin(pinOutEnable);
+    motor.setPinsInverted(true, false, true);
+
+    motor.setMaxSpeed(3000);
+    
+    offsetPositionUSteps = angle_to_usteps(INITIAL_ANGLE);
+    maximumPositionUSteps = angle_to_usteps(MAXIMUM_ANGLE);
+
+    barndoor.add_transition(&stateOff, &stateSidereal, START_BUTTON, NULL);
+    barndoor.add_transition(&stateOff, &stateHighspeed, REWIND_BUTTON, NULL);
+    barndoor.add_transition(&stateSidereal, &stateOff, STOP_BUTTON, NULL);
+    barndoor.add_transition(&stateSidereal, &stateOff, END_SWITCH, NULL);
+    barndoor.add_transition(&stateSidereal, &stateHighspeed, REWIND_BUTTON, NULL);
+    barndoor.add_transition(&stateHighspeed, &stateSidereal, START_BUTTON, NULL);
+    barndoor.add_transition(&stateHighspeed, &stateOff, STOP_BUTTON, NULL);
+    barndoor.add_transition(&stateHighspeed, &stateOff, START_SWITCH, NULL);
+    barndoor.add_transition(&stateHighspeed, &stateOff, END_SWITCH, NULL);
+
+#ifdef DEBUG
+    Serial.begin(9600);
+#endif
+}
 
 void loop(void)
 {
+    poll_switches();
     // pinInSidereal/pinInHighspeed are two poles of a 3-position
     // switch, that let us choose between sidereal tracking,
     // stopped and highspeed mode
-    if (analogRead(pinInSidereal) < 512) {
-        barndoor.transitionTo(stateSidereal);
-    } else if (analogRead(pinInHighspeed) < 512) {
-        barndoor.transitionTo(stateHighspeed);
-    } else {
-        barndoor.transitionTo(stateOff);
+    if (StartButton.pushed()) {
+        barndoor.trigger(START_BUTTON);
     }
-    barndoor.update();
+    if (RewindButton.pushed()) {
+        barndoor.trigger(REWIND_BUTTON);
+    }
+    if (StopButton.pushed()) {
+        barndoor.trigger(STOP_BUTTON);
+    }
+    
+    if(StartLimit.pushed()) {
+        barndoor.trigger(START_SWITCH);
+    }
+    if (EndLimit.pushed()) {
+         barndoor.trigger(END_SWITCH);
+    }
+    barndoor.run_machine();
 }
+
 
 //
 // Local variables:
@@ -368,3 +424,6 @@ void loop(void)
 //  indent-tabs-mode: nil
 // End:
 //
+
+
+
