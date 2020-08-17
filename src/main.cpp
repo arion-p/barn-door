@@ -31,16 +31,14 @@
 // formulas to correct errors
 
 #include <Fsm.h>
-
-// http://www.airspayce.com/mikem/arduino/AccelStepper/
-#include <AccelStepper.h>
+#include <FastAccelStepper.h>
 #include <avdweb_Switch.h>
 
 #define PREFER_SINE
 
 // We don't want to send debug over the serial port by default since
 // it seriously slows down the main loop causing tracking errors
-//#define DEBUG
+#define DEBUG
 
 // Constants to set based on hardware construction specs
 //
@@ -57,7 +55,7 @@ static const float INITIAL_OPENING = 2.1;       // Initial opening of barn doors
 static const float MAXIMUM_OPENING = 16.5;      // Maximum distance to allow barn doors to open (30 deg == 2 hours)
 
 #define MOTOR_ACCELERATION  1000L    // steps per sec^2 - need to test this
-#define MOTOR_MAX_SPEED     2500L    // steps per sec
+#define MOTOR_MAX_SPEED     4000L    // steps per sec
 #define MOTOR_SLOW_SPEED        0.05     // cm/sec
 #define MOTOR_VERY_SLOW_SPEED   0.01     // cm/sec
 
@@ -65,9 +63,9 @@ static const float MAXIMUM_OPENING = 16.5;      // Maximum distance to allow bar
 // is not an Isoceles mount, or you changed the electrical circuit design
 
 // Constants to set based on electronic construction specs
-static const int pinOutStep = 3;      // Arduino digital pin connected to EasyDriver step
-static const int pinOutDirection = 2; // Arduino digital pin connected to EasyDriver direction
-static const int pinOutEnable = 4; // Arduino digital pin connected to EasyDriver enable
+static const int pinOutStep = 9;      // Arduino digital pin connected to DRV8825 step
+static const int pinOutDirection = 5; // Arduino digital pin connected to DRV8825 direction
+static const int pinOutEnable = 6; // Arduino digital pin connected to DRV8825 enable
 
 static const int pinInStart = A0;  
 static const int pinInStop = A1; 
@@ -81,16 +79,19 @@ static const int pinInStartLimit = A4;
 static const int pinInEndLimit = A5;
 #endif
 
+#define REPLAN_INTERVAL     5000L
 #define PLANAHEAD_TIME      15000L
 
+#define TICKS_PER_MS        (F_CPU / 1000L)
+
 // Derived constants
-static const long MOTOR_USTEPS_ACCELERATION = MOTOR_ACCELERATION * MICRO_STEPS;
-static const long MOTOR_MAX_USTEPS_SPEED = MOTOR_MAX_SPEED * MICRO_STEPS;
+static const long MOTOR_USTEPS_ACCELERATION = (MOTOR_ACCELERATION * MICRO_STEPS);
+static const long MOTOR_MAX_USTEPS_SPEED = F_CPU / (MOTOR_MAX_SPEED * MICRO_STEPS);
 
 static const float USTEPS_PER_ROTATION = 360.0 / STEP_SIZE_DEG * MICRO_STEPS; // usteps per rod rotation
 static const float USTEPS_PER_CM = THREADS_PER_CM * USTEPS_PER_ROTATION;
-static const long MOTOR_SLOW_SPEED_USTEPS = (long)(MOTOR_SLOW_SPEED * USTEPS_PER_CM);
-static const long MOTOR_VERY_SLOW_SPEED_USTEPS = (long)(MOTOR_VERY_SLOW_SPEED * USTEPS_PER_CM);
+static const long MOTOR_SLOW_SPEED_USTEPS = F_CPU / (MOTOR_SLOW_SPEED * USTEPS_PER_CM);
+static const long MOTOR_VERY_SLOW_SPEED_USTEPS = F_CPU / (MOTOR_VERY_SLOW_SPEED * USTEPS_PER_CM);
 
 // Assuming:
 // d = thread length (between two pivot points)
@@ -143,10 +144,10 @@ static const float LAMBDA = 2 * PI / (1000.0 * SIDE_REAL_SECS); // ms to angle f
 #define END_SWITCH          4
 #define START_SWITCH        5
 
-// Setup motor class with parameters targetting an EasyDriver board
-static AccelStepper motor(AccelStepper::DRIVER,
-                          pinOutStep,
-                          pinOutDirection);
+// Setup motor class with parameters targetting an DRV8825 board
+
+FastAccelStepperEngine engine = FastAccelStepperEngine();
+FastAccelStepper *motor = engine.stepperA();
 
 Switch StartButton(pinInStart);
 Switch StopButton(pinInStop);
@@ -174,7 +175,7 @@ long time_to_usteps(long ms)
 long usteps_to_time(long usteps)
 {
     return (long)(
-      asin(sqrt((square(usteps) - BETA2) / ALPHA2)) *
+      asin(sqrt((square((float)usteps) - BETA2) / ALPHA2)) *
       1000.0 * SIDE_REAL_SECS / PI);
     // return (long)(
     //   asin(sqrt((square(usteps / USTEPS_PER_CM) - BETA) / ALPHA)) *
@@ -219,6 +220,8 @@ long distance_to_usteps(float distance)
 // These variables are initialized when the motor switches
 // from stopped to running, so we know our starting conditions
 
+
+static long offsetHomePositionUSteps;
 // If the barn door doesn't go to 100% closed, this records
 // the inital offset we started from for INITIAL_ANGLE
 static long offsetPositionUSteps;
@@ -246,15 +249,42 @@ static long targetPositionMs;
 // Total motor steps associated with target point
 static long targetPositionUSteps;
 
+// base step time in ticks
+static long stepTime;
+// The following are used in the line algorithm
+// used to distribute the remaining ticks between steps
+// number of steps in the plan
+static long deltaSteps;
+// number of ectra ticks to distribute
+static long deltaTicks;
+// the cumulative error multiplied by 2*deltaSteps
+static long ticksError;
 
+static float minSpeed;
+static float maxSpeed;
 
 // The logical motor position which takes into account the
 // fact that we have an initial opening angle
 long motor_position()
 {
-    return motor.currentPosition() + offsetPositionUSteps;
+    return motor->getCurrentPosition() - offsetHomePositionUSteps + offsetPositionUSteps;
 }
 
+long motor_position(long position)
+{
+    return position - offsetHomePositionUSteps + offsetPositionUSteps;
+}
+
+long motor_position_at_queue_end()
+{
+    return motor->getPositionAfterCommandsCompleted() - offsetHomePositionUSteps + offsetPositionUSteps;
+}
+
+
+void motor_moveTo(long position)
+{
+    motor->moveTo(position + offsetHomePositionUSteps - offsetPositionUSteps);
+}
 
 // This is called whenever the motor is switch from stopped to running.
 //
@@ -265,10 +295,15 @@ long motor_position()
 // to figure out subsequent deltas
 void start_tracking(void)
 {
-    startPositionUSteps = motor_position();
+    startPositionUSteps = motor_position_at_queue_end();
     startPositionMs = usteps_to_time(startPositionUSteps);
+    targetPositionMs = startPositionMs;
+    targetPositionUSteps = startPositionUSteps;
     startWallClockMs = millis();
     targetWallClockMs = startWallClockMs;
+
+    minSpeed = 0;
+    maxSpeed = 0;
 
 #ifdef DEBUG
     Serial.print("Enter sidereal\n");
@@ -293,15 +328,24 @@ void start_tracking(void)
 //
 // So we set our target values to what we expect them all to be
 // 15 seconds  in the future
-void plan_tracking(void)
+void plan_tracking(long currentWallClockMs)
 {
-    targetWallClockMs = targetWallClockMs + PLANAHEAD_TIME;
-    targetPositionMs = startPositionMs + (targetWallClockMs - startWallClockMs);
-    targetPositionUSteps = time_to_usteps(targetPositionMs);
+    //targetWallClockMs = targetWallClockMs + PLANAHEAD_TIME;
+    targetWallClockMs = currentWallClockMs + PLANAHEAD_TIME;
+    long newTargetPositionMs = startPositionMs + (targetWallClockMs - startWallClockMs);
+    long newTargetPositionUSteps = time_to_usteps(newTargetPositionMs);
+    deltaSteps = newTargetPositionUSteps - targetPositionUSteps;
+    deltaTicks = TICKS_PER_MS * (newTargetPositionMs - targetPositionMs);
+    stepTime = deltaTicks / deltaSteps;
+    deltaTicks -= stepTime * deltaSteps;
+    ticksError = 0;
+    
+    targetPositionMs = newTargetPositionMs;
+    targetPositionUSteps = newTargetPositionUSteps;
 
 #ifdef DEBUG
     Serial.print("current pos usteps: ");
-    Serial.print(motor_position());
+    Serial.print(motor_position_at_queue_end());
     Serial.print(", target pos usteps: ");
     Serial.print(targetPositionUSteps);
     Serial.print(", target pos ms: ");
@@ -310,6 +354,8 @@ void plan_tracking(void)
     Serial.print(targetWallClockMs);
     Serial.print("\n");
 #endif
+    minSpeed = 200;
+    maxSpeed = 0;
 }
 
 
@@ -325,10 +371,7 @@ void plan_tracking(void)
 // constant rate
 void apply_tracking(long currentWallClockMs)
 {
-    long timeLeft = targetWallClockMs - currentWallClockMs;
-    long stepsLeft = targetPositionUSteps - motor_position();
-    float stepsPerSec = 1000.0 * (float)stepsLeft / (float)timeLeft;
-
+ 
 #ifdef DEBUG32
     Serial.print("Target ");
     Serial.print(targetPositionUSteps);
@@ -339,11 +382,27 @@ void apply_tracking(long currentWallClockMs)
     Serial.print("\n");
 #endif
 
-    if (motor_position() >= maximumPositionUSteps) {
-        motor.stop();
+    if (motor_position_at_queue_end() >= maximumPositionUSteps) {
+        if (motor->isStopped()) {
+            barndoor.trigger(END_SWITCH);
+        }
     } else {
-        motor.setSpeed(stepsPerSec);
-        motor.runSpeed();
+        // Add queue entry if necessary
+        if(!motor->isQueueFull()) {
+
+            if(motor_position_at_queue_end() >= targetPositionUSteps) {
+                plan_tracking(currentWallClockMs);
+            }
+
+            // Line drawing algorithm used to distribute extra ticks evenly between steps
+            long ticks = stepTime;
+            ticksError += 2 * deltaTicks;
+            if(ticksError > deltaSteps) {
+                ticksError -= 2 * deltaSteps;
+                ticks++;
+            }
+            motor->addQueueEntry(ticks, 1, true);
+        }
     }
 }
 
@@ -353,7 +412,7 @@ void apply_tracking(long currentWallClockMs)
 void state_sidereal_enter(void)
 {
     start_tracking();
-    plan_tracking();
+    plan_tracking(startWallClockMs);
 }
 
 
@@ -367,9 +426,9 @@ void state_sidereal_update(void)
 {
     long currentWallClockMs = millis();
 
-    if (currentWallClockMs >= targetWallClockMs) {
-        plan_tracking();
-    }
+    // if (currentWallClockMs >= targetWallClockMs - REPLAN_INTERVAL) {
+    //     plan_tracking(currentWallClockMs);
+    // }
 
     apply_tracking(currentWallClockMs);
 }
@@ -397,21 +456,17 @@ void state_highspeed_update(void)
     // of motion
     if (digitalRead(pinInDirection)) {
         if (motor_position() >= maximumPositionUSteps) {
-            motor.stop();
+            //motor->addQueueStepperStop();
             barndoor.trigger(END_SWITCH);
         } else {
-            motor.moveTo(maximumPositionUSteps);
-
-            motor.run();
+            motor_moveTo(maximumPositionUSteps);
         }
     } else {
-        if (motor.currentPosition() <= 0) {
-            motor.stop();
+        if (motor_position() <= offsetPositionUSteps) {
+            //motor->addQueueStepperStop();
             barndoor.trigger(START_SWITCH);
         } else {
-            motor.moveTo(0);
-
-            motor.run();
+            motor_moveTo(offsetPositionUSteps);
         }
     }
 }
@@ -426,21 +481,15 @@ void state_off_enter(void)
 #ifdef DEBUG
     Serial.print("Enter off\n");
 #endif
-    motor.stop();
+    //motor->addQueueStepperStop();
 }
 
 void state_off_update(void)
 {
-    if(motor.isRunning()) {
-        motor.run();
-    } else  {
-        motor.disableOutputs(); // save power by disabling outputs
-    }
 }
 
 void state_off_exit(void)
 {
-    motor.enableOutputs();
 }
 
 
@@ -450,11 +499,10 @@ void auto_home_motor(void) {
         Serial.print("Auto homing...");
     #endif
     // Move motor to home position until Start limit switch is activated
-    motor.setSpeed(-MOTOR_SLOW_SPEED_USTEPS);
     StartLimit.poll();
-    motor.enableOutputs();
+    motor->enableOutputs();
     while(!StartLimit.on()) {
-        motor.runSpeed();
+        if (!motor->isQueueFull()) motor->addQueueEntry(MOTOR_SLOW_SPEED_USTEPS, 1, false);
         StartLimit.poll();
     }
 
@@ -462,15 +510,13 @@ void auto_home_motor(void) {
         Serial.print("backing up...");
     #endif
     // Back up slowly until Start limit switch is released
-    motor.setSpeed(MOTOR_VERY_SLOW_SPEED_USTEPS);
     while(StartLimit.on()) {
-        motor.runSpeed();
+        if (motor->isQueueEmpty()) motor->addQueueEntry(MOTOR_VERY_SLOW_SPEED_USTEPS, 1, true);
         StartLimit.poll();
     }
 
     // Stop motor. It is now homed
-    motor.stop();
-    motor.setCurrentPosition(0);
+    offsetHomePositionUSteps = motor->getCurrentPosition();
     #ifdef DEBUG
         Serial.print("done.\n");
     #endif
@@ -494,10 +540,12 @@ Fsm barndoor(&stateOff);
 // Global initialization when first turned off
 void setup(void)
 {
-    motor.setEnablePin(pinOutEnable);
-    motor.setPinsInverted(true, false, true);
-    motor.setAcceleration(MOTOR_USTEPS_ACCELERATION);
-    motor.setMaxSpeed(MOTOR_MAX_USTEPS_SPEED);
+    engine.init();
+    motor->setDirectionPin(pinOutDirection);
+    motor->setEnablePin(pinOutEnable);
+    motor->setAutoEnable(true);
+    motor->setAcceleration(MOTOR_USTEPS_ACCELERATION);
+    motor->setSpeed(MOTOR_MAX_USTEPS_SPEED);
     
     // offsetPositionUSteps = angle_to_usteps(INITIAL_ANGLE);
     // maximumPositionUSteps = angle_to_usteps(MAXIMUM_ANGLE);
