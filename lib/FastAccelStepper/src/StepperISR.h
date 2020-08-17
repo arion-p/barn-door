@@ -102,12 +102,12 @@ class StepperQueue {
     uint16_t period;
     uint8_t n_periods;
     if (ticks > 65535) {
-      n_periods = ticks >> 16;
-      n_periods += 1;
-      period = ticks / n_periods;
+      n_periods = ticks / PERIOD_TICKS;
+      //n_periods += 1;
+      period = ticks % PERIOD_TICKS;
     } else {
       period = ticks;
-      n_periods = 1;
+      n_periods = 0;
     }
 
     uint8_t wp = next_write_ptr;
