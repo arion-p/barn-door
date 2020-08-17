@@ -330,9 +330,11 @@ void start_tracking(void)
 // 15 seconds  in the future
 void plan_tracking(long currentWallClockMs)
 {
+    long current_position = motor_position();
     //targetWallClockMs = targetWallClockMs + PLANAHEAD_TIME;
     targetWallClockMs = currentWallClockMs + PLANAHEAD_TIME;
-    long newTargetPositionMs = startPositionMs + (targetWallClockMs - startWallClockMs);
+    //long newTargetPositionMs = startPositionMs + (targetWallClockMs - startWallClockMs);
+    long newTargetPositionMs = targetPositionMs + PLANAHEAD_TIME;
     long newTargetPositionUSteps = time_to_usteps(newTargetPositionMs);
     deltaSteps = newTargetPositionUSteps - targetPositionUSteps;
     deltaTicks = TICKS_PER_MS * (newTargetPositionMs - targetPositionMs);
@@ -345,6 +347,8 @@ void plan_tracking(long currentWallClockMs)
 
 #ifdef DEBUG
     Serial.print("current pos usteps: ");
+    Serial.print(current_position);
+    Serial.print("/");
     Serial.print(motor_position_at_queue_end());
     Serial.print(", target pos usteps: ");
     Serial.print(targetPositionUSteps);
