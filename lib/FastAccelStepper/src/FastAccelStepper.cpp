@@ -624,6 +624,12 @@ void FastAccelStepper::enableOutputs() {
 int32_t FastAccelStepper::getPositionAfterCommandsCompleted() {
   return fas_queue[_queue_num].pos_at_queue_end;
 }
+
+void FastAccelStepper::setPositionAfterCommandsCompleted(int32_t position) {
+  _target_pos += position - fas_queue[_queue_num].pos_at_queue_end;
+  fas_queue[_queue_num].pos_at_queue_end = position;
+}
+
 int32_t FastAccelStepper::getCurrentPosition() {
   int32_t pos = getPositionAfterCommandsCompleted();
   bool dir = fas_queue[_queue_num].dir_high_at_queue_end;

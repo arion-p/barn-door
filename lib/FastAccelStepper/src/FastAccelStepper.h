@@ -109,6 +109,8 @@ class FastAccelStepper {
   // completed
   int32_t getPositionAfterCommandsCompleted();
 
+  void setPositionAfterCommandsCompleted(int32_t newPosition);
+
   // to be deprecated
   void addQueueStepperStop();
   bool isStopped();

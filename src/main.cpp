@@ -221,7 +221,6 @@ long distance_to_usteps(float distance)
 // from stopped to running, so we know our starting conditions
 
 
-static long offsetHomePositionUSteps;
 // If the barn door doesn't go to 100% closed, this records
 // the inital offset we started from for INITIAL_ANGLE
 static long offsetPositionUSteps;
@@ -267,23 +266,40 @@ static float maxSpeed;
 // fact that we have an initial opening angle
 long motor_position()
 {
-    return motor->getCurrentPosition() - offsetHomePositionUSteps + offsetPositionUSteps;
+    return motor->getCurrentPosition() + offsetPositionUSteps;
 }
 
 long motor_position(long position)
 {
-    return position - offsetHomePositionUSteps + offsetPositionUSteps;
+    return position + offsetPositionUSteps;
 }
 
 long motor_position_at_queue_end()
 {
-    return motor->getPositionAfterCommandsCompleted() - offsetHomePositionUSteps + offsetPositionUSteps;
+    return motor->getPositionAfterCommandsCompleted() + offsetPositionUSteps;
 }
 
 
 void motor_moveTo(long position)
 {
-    motor->moveTo(position + offsetHomePositionUSteps - offsetPositionUSteps);
+    position -= offsetPositionUSteps;
+    if(motor->targetPos() != position)
+    {
+#ifdef DEBUG
+        Serial.print("motor current target pos: ");
+        Serial.print(motor->targetPos());
+        Serial.print(", new target pos: ");
+        Serial.print(position);
+        Serial.print("\n");
+#endif
+        motor->moveTo(position);
+    }
+}
+
+void motor_stop()
+{
+    motor->moveTo(motor->getPositionAfterCommandsCompleted());
+
 }
 
 // This is called whenever the motor is switch from stopped to running.
@@ -440,10 +456,14 @@ void state_sidereal_update(void)
 void state_sidereal_exit(void)
 {
     // nada
+    motor_stop();
 }
 
 void state_highspeed_enter(void)
 {
+    motor_stop();
+    delay(10);
+
 #ifdef DEBUG
     Serial.print("Enter highspeed\n");
 #endif
@@ -478,6 +498,7 @@ void state_highspeed_update(void)
 void state_highspeed_exit(void)
 {
     // nada
+    motor_stop();
 }
 
 void state_off_enter(void)
@@ -485,6 +506,8 @@ void state_off_enter(void)
 #ifdef DEBUG
     Serial.print("Enter off\n");
 #endif
+    motor_stop();
+
     //motor->addQueueStepperStop();
 }
 
@@ -520,7 +543,7 @@ void auto_home_motor(void) {
     }
 
     // Stop motor. It is now homed
-    offsetHomePositionUSteps = motor->getCurrentPosition();
+    motor->setPositionAfterCommandsCompleted(0);
     #ifdef DEBUG
         Serial.print("done.\n");
     #endif
