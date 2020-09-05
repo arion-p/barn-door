@@ -105,6 +105,10 @@ class StepperQueue {
       n_periods = ticks / PERIOD_TICKS;
       //n_periods += 1;
       period = ticks % PERIOD_TICKS;
+      if (period < MIN_DELTA_TICKS) {
+        n_periods--;
+        period += PERIOD_TICKS;
+      }
     } else {
       period = ticks;
       n_periods = 0;
