@@ -34,6 +34,9 @@
 #include <FastAccelStepper.h>
 #include <avdweb_Switch.h>
 
+#include "events.h"
+#include "usb_control.h"
+
 #define PREFER_SINE
 
 // We don't want to send debug over the serial port by default since
@@ -137,13 +140,6 @@ static const float BETA = BASE_LEN_LOWER_CM * BASE_LEN_LOWER_CM + BASE_LEN_UPPER
 static const float LAMBDA = 2 * PI / (1000.0 * SIDE_REAL_SECS); // ms to angle factor
 #endif
 
-// Events
-#define START_BUTTON        1
-#define REWIND_BUTTON       2
-#define STOP_BUTTON         3
-#define END_SWITCH          4
-#define START_SWITCH        5
-
 // Setup motor class with parameters targetting an DRV8825 board
 
 FastAccelStepperEngine engine = FastAccelStepperEngine();
@@ -157,6 +153,11 @@ Switch EndLimit(pinInEndLimit, INPUT_PULLUP, false, 10, 300, 250, 5);
 
 // Forward declaration
 extern Fsm barndoor;
+
+#ifdef USB_CONTROL
+UsbControl usbControl;
+#endif
+
 
 #ifdef PREFER_SINE
 // Given time offset from the 100% closed position, figure out
@@ -286,7 +287,7 @@ void motor_moveTo(long position)
     if(motor->targetPos() != position)
     {
 #ifdef DEBUG
-        Serial.print("motor current target pos: ");
+        Serial.print("# motor current target pos: ");
         Serial.print(motor->targetPos());
         Serial.print(", new target pos: ");
         Serial.print(position);
@@ -322,8 +323,8 @@ void start_tracking(void)
     maxSpeed = 0;
 
 #ifdef DEBUG
-    Serial.print("Enter sidereal\n");
-    Serial.print("offset pos usteps: ");
+    Serial.print("# Enter sidereal\n");
+    Serial.print("# offset pos usteps: ");
     Serial.print(offsetPositionUSteps);
     Serial.print(", start pos usteps: ");
     Serial.print(startPositionUSteps);
@@ -362,7 +363,7 @@ void plan_tracking(long currentWallClockMs)
     targetPositionUSteps = newTargetPositionUSteps;
 
 #ifdef DEBUG
-    Serial.print("current pos usteps: ");
+    Serial.print("# current pos usteps: ");
     Serial.print(current_position);
     Serial.print("/");
     Serial.print(motor_position_at_queue_end());
@@ -393,7 +394,7 @@ void apply_tracking(long currentWallClockMs)
 {
  
 #ifdef DEBUG32
-    Serial.print("Target ");
+    Serial.print("# Target ");
     Serial.print(targetPositionUSteps);
     Serial.print("  curr ");
     Serial.print(motor_position());
@@ -465,7 +466,7 @@ void state_highspeed_enter(void)
     delay(10);
 
 #ifdef DEBUG
-    Serial.print("Enter highspeed\n");
+    Serial.print("# Enter highspeed\n");
 #endif
 }
 
@@ -504,7 +505,7 @@ void state_highspeed_exit(void)
 void state_off_enter(void)
 {
 #ifdef DEBUG
-    Serial.print("Enter off\n");
+    Serial.print("# Enter off\n");
 #endif
     motor_stop();
 
@@ -523,7 +524,7 @@ void state_off_exit(void)
 void auto_home_motor(void) {
 
     #ifdef DEBUG
-        Serial.print("Auto homing...");
+        Serial.print("# Auto homing...");
     #endif
     // Move motor to home position until Start limit switch is activated
     StartLimit.poll();
@@ -558,6 +559,7 @@ void poll_switches(void) {
 }
 
 
+
 // A finite state machine with 3 states - sidereal, highspeed and off
 static State stateSidereal(state_sidereal_enter, state_sidereal_update, state_sidereal_exit);
 static State stateHighspeed(state_highspeed_enter, state_highspeed_update, state_highspeed_exit);
@@ -590,13 +592,15 @@ void setup(void)
     barndoor.add_transition(&stateHighspeed, &stateOff, END_SWITCH, NULL);
 
     auto_home_motor();
-#ifdef DEBUG
+#if defined(DEBUG) || defined(USB_CONTROL)
+//#ifdef DEBUG 
     Serial.begin(115200);
 #endif
 }
 
 void loop(void)
 {
+    long endTime = millis() + 8;
     poll_switches();
     // pinInSidereal/pinInHighspeed are two poles of a 3-position
     // switch, that let us choose between sidereal tracking,
@@ -617,7 +621,12 @@ void loop(void)
     if (EndLimit.pushed()) {
          barndoor.trigger(END_SWITCH);
     }
+
     barndoor.run_machine();
+
+    #ifdef USB_CONTROL
+        usbControl.loop(endTime - millis());
+    #endif
 }
 
 
