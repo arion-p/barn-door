@@ -34,6 +34,7 @@
 #include <FastAccelStepper.h>
 #include <avdweb_Switch.h>
 
+#include "defines.h"
 #include "events.h"
 #include "usb_control.h"
 
@@ -48,39 +49,12 @@
 // Assuming you followed the blog linked above, these few variables
 // should be the only things that you need to change in general
 //
-static const float STEP_SIZE_DEG = 1.8;  // Degrees rotation per step
-static const float MICRO_STEPS = 32;      // Number of microsteps per step
-static const float THREADS_PER_CM = 8;   // Number of threads in rod per cm of length
-static const float BASE_LEN_UPPER_CM = 28.1;    // Length from hinge to center of rod in cm
-static const float BASE_LEN_LOWER_CM = 28;      // Length from hinge to center of rod in cm
 static const float INITIAL_OPENING = 2.1;       // Initial opening of barn doors when switched on 
                                                 // (distance between two pivot points in cm)
 static const float MAXIMUM_OPENING = 16.5;      // Maximum distance to allow barn doors to open (30 deg == 2 hours)
 
-#define MOTOR_ACCELERATION  1000L    // steps per sec^2 - need to test this
-#define MOTOR_MAX_SPEED     4000L    // steps per sec
-#define MOTOR_SLOW_SPEED        0.05     // cm/sec
-#define MOTOR_VERY_SLOW_SPEED   0.01     // cm/sec
-
 // Nothing below this line should require changing unless your barndoor
 // is not an Isoceles mount, or you changed the electrical circuit design
-
-// Constants to set based on electronic construction specs
-static const int pinOutStep = 9;      // Arduino digital pin connected to DRV8825 step
-static const int pinOutDirection = 5; // Arduino digital pin connected to DRV8825 direction
-static const int pinOutEnable = 6; // Arduino digital pin connected to DRV8825 enable
-
-static const int pinInStart = A0;  
-static const int pinInStop = A1; 
-static const int pinInRewind = A2; 
-static const int pinInDirection = A3; 
-#ifdef PRO_MINI
-static const int pinInStartLimit = A6;
-static const int pinInEndLimit = A7;
-#else
-static const int pinInStartLimit = A4;
-static const int pinInEndLimit = A5;
-#endif
 
 #define REPLAN_INTERVAL     5000L
 #define PLANAHEAD_TIME      15000L
@@ -143,13 +117,13 @@ static const float LAMBDA = 2 * PI / (1000.0 * SIDE_REAL_SECS); // ms to angle f
 // Setup motor class with parameters targetting an DRV8825 board
 
 FastAccelStepperEngine engine = FastAccelStepperEngine();
-FastAccelStepper *motor = engine.stepperConnectToPin(pinOutStep);
+FastAccelStepper *motor = engine.stepperConnectToPin(PIN_OUT_STEP);
 
-Switch StartButton(pinInStart);
-Switch StopButton(pinInStop);
-Switch RewindButton(pinInRewind);
-Switch StartLimit(pinInStartLimit, INPUT_PULLUP, false, 10, 300, 250, 5);
-Switch EndLimit(pinInEndLimit, INPUT_PULLUP, false, 10, 300, 250, 5);
+Switch StartButton(PIN_IN_START);
+Switch StopButton(PIN_IN_STOP);
+Switch RewindButton(PIN_IN_REWIND);
+Switch StartLimit(PIN_IN_START_LIMIT, INPUT_PULLUP, false, 10, 300, 250, 5);
+Switch EndLimit(PIN_IN_END_LIMIT, INPUT_PULLUP, false, 10, 300, 250, 5);
 
 // Forward declaration
 extern Fsm barndoor;
@@ -483,7 +457,7 @@ void state_highspeed_update(void)
 {
     // pinInDirection is a 2-position switch for choosing direction
     // of motion
-    if (digitalRead(pinInDirection)) {
+    if (digitalRead(PIN_IN_DIRECTION)) {
         if (motor_position() >= maximumPositionUSteps) {
             //motor->addQueueStepperStop();
             barndoor.trigger(EVENT_END_SWITCH);
@@ -585,8 +559,8 @@ Fsm barndoor(&stateOff);
 void setup(void)
 {
     engine.init();
-    motor->setDirectionPin(pinOutDirection);
-    motor->setEnablePin(pinOutEnable);
+    motor->setDirectionPin(PIN_OUT_DIRECTION);
+    motor->setEnablePin(PIN_OUT_ENABLE);
     motor->setAutoEnable(true);
     motor->setAcceleration(MOTOR_USTEPS_ACCELERATION);
     motor->setSpeed(MOTOR_MAX_USTEPS_SPEED);
