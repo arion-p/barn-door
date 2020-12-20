@@ -408,7 +408,7 @@ void apply_tracking(long currentWallClockMs)
 
     if (motor_position_at_queue_end() >= maximumPositionUSteps) {
         if (!motor->isRunning()) {
-            barndoor.trigger(END_SWITCH);
+            barndoor.trigger(EVENT_END_SWITCH);
         }
     } else {
         // Add queue entry if necessary
@@ -486,14 +486,14 @@ void state_highspeed_update(void)
     if (digitalRead(pinInDirection)) {
         if (motor_position() >= maximumPositionUSteps) {
             //motor->addQueueStepperStop();
-            barndoor.trigger(END_SWITCH);
+            barndoor.trigger(EVENT_END_SWITCH);
         } else {
             motor_moveTo(maximumPositionUSteps);
         }
     } else {
         if (motor_position() <= offsetPositionUSteps) {
             //motor->addQueueStepperStop();
-            barndoor.trigger(START_SWITCH);
+            barndoor.trigger(EVENT_START_SWITCH);
         } else {
             motor_moveTo(offsetPositionUSteps);
         }
@@ -596,15 +596,17 @@ void setup(void)
     offsetPositionUSteps = distance_to_usteps(INITIAL_OPENING);
     maximumPositionUSteps = distance_to_usteps(MAXIMUM_OPENING);
 
-    barndoor.add_transition(&stateOff, &stateSidereal, START_BUTTON, NULL);
-    barndoor.add_transition(&stateOff, &stateHighspeed, REWIND_BUTTON, NULL);
-    barndoor.add_transition(&stateSidereal, &stateOff, STOP_BUTTON, NULL);
-    barndoor.add_transition(&stateSidereal, &stateOff, END_SWITCH, NULL);
-    barndoor.add_transition(&stateSidereal, &stateHighspeed, REWIND_BUTTON, NULL);
-    barndoor.add_transition(&stateHighspeed, &stateSidereal, START_BUTTON, NULL);
-    barndoor.add_transition(&stateHighspeed, &stateOff, STOP_BUTTON, NULL);
-    barndoor.add_transition(&stateHighspeed, &stateOff, START_SWITCH, NULL);
-    barndoor.add_transition(&stateHighspeed, &stateOff, END_SWITCH, NULL);
+    barndoor.add_transition(&stateOff, &stateSidereal, EVENT_START_BUTTON, NULL);
+    barndoor.add_transition(&stateOff, &stateHighspeed, EVENT_REWIND_BUTTON, NULL);
+    barndoor.add_transition(&stateSidereal, &stateOff, EVENT_STOP_BUTTON, NULL);
+    barndoor.add_transition(&stateSidereal, &stateOff, EVENT_END_SWITCH, NULL);
+    barndoor.add_transition(&stateSidereal, &stateHighspeed, EVENT_REWIND_BUTTON, NULL);
+    barndoor.add_transition(&stateHighspeed, &stateSidereal, EVENT_START_BUTTON, NULL);
+    barndoor.add_transition(&stateHighspeed, &stateOff, EVENT_STOP_BUTTON, NULL);
+    barndoor.add_transition(&stateHighspeed, &stateOff, EVENT_START_SWITCH, NULL);
+    barndoor.add_transition(&stateHighspeed, &stateOff, EVENT_END_SWITCH, NULL);
+
+    barndoor.add_transition(&stateOff, &stateOff, EVENT_AUTO_HOME, auto_home_motor);
 
     auto_home_motor();
 #if defined(DEBUG) || defined(USB_CONTROL)
@@ -621,20 +623,20 @@ void loop(void)
     // switch, that let us choose between sidereal tracking,
     // stopped and highspeed mode
     if (StartButton.pushed()) {
-        barndoor.trigger(START_BUTTON);
+        barndoor.trigger(EVENT_START_BUTTON);
     }
     if (RewindButton.pushed()) {
-        barndoor.trigger(REWIND_BUTTON);
+        barndoor.trigger(EVENT_REWIND_BUTTON);
     }
     if (StopButton.pushed()) {
-        barndoor.trigger(STOP_BUTTON);
+        barndoor.trigger(EVENT_STOP_BUTTON);
     }
     
     if(StartLimit.pushed()) {
-        barndoor.trigger(START_SWITCH);
+        barndoor.trigger(EVENT_START_SWITCH);
     }
     if (EndLimit.pushed()) {
-         barndoor.trigger(END_SWITCH);
+         barndoor.trigger(EVENT_END_SWITCH);
     }
 
     barndoor.run_machine();

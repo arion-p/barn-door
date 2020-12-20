@@ -12,22 +12,23 @@ typedef struct {
 
 
 void actionStart(char *p) {
-    barndoor.trigger(START_BUTTON);
+    barndoor.trigger(EVENT_START_BUTTON);
     Serial.print(F(">OK\r"));
 }
 
 void actionStop(char *p) {
-    barndoor.trigger(STOP_BUTTON);
+    barndoor.trigger(EVENT_STOP_BUTTON);
     Serial.print(F(">OK\r"));
 }
 
 void actionRewind(char *p) {
-    barndoor.trigger(REWIND_BUTTON);
+    barndoor.trigger(EVENT_REWIND_BUTTON);
     Serial.print(F(">OK\r"));
 }
 
 void actionAutoHome(char *p) {
-    Serial.print(F(">ERR: NOT SUPPORTED\r"));
+    barndoor.trigger(EVENT_AUTO_HOME);
+    Serial.print(F(">OK\r"));
 }
 
 void actionSetMinOpening(char *p) {
