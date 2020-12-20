@@ -1,6 +1,8 @@
 #include <Fsm.h>
 #include "usb_control.h"
+#include "defines.h"
 #include "events.h"
+#include "settings.h"
 
 extern Fsm barndoor;
 
@@ -32,10 +34,33 @@ void actionAutoHome(char *p) {
 }
 
 void actionSetMinOpening(char *p) {
-    Serial.print(F(">ERR: NOT SUPPORTED\r"));
+    float newMinOpening;
+    if(EOF != sscanf(p, "%f", &newMinOpening))
+    {
+        InitialOpening = newMinOpening;
+        init();
+    }
+    Serial.print(F(">OK\r"));
 }
 
+
 void actionSetMaxOpening(char *p) {
+    float newMaxOpening;
+    if(EOF != sscanf(p, "%f", &newMaxOpening))
+    {
+        MaximumOpening = newMaxOpening;
+        init();
+     }
+    Serial.print(F(">OK\r"));
+}
+
+void actionGetTime(char *p) {
+    Serial.print(F(">OK: "));
+    Serial.print(micros());
+    Serial.print('\r');
+}
+
+void actionSetPlanTimes(char *p) {
     Serial.print(F(">ERR: NOT SUPPORTED\r"));
 }
 
@@ -48,21 +73,25 @@ void actionSaveConfig(char *p) {
 #define COMMAND(cmd, action)     {COMMAND_##cmd, sizeof(#cmd)-1, action}
 #define NULL_COMMAND             {NULL, 0, NULL}
 
+DEF_COMMAND(GET_TIME);
 DEF_COMMAND(START);
 DEF_COMMAND(STOP);
 DEF_COMMAND(REWIND);
 DEF_COMMAND(AUTO_HOME);
 DEF_COMMAND(SET_MIN_OPENING);
 DEF_COMMAND(SET_MAX_OPENING);
+DEF_COMMAND(SET_PLAN_TIMES);
 DEF_COMMAND(SAVE_CONFIG);
 
 const Command Commands[] = {
+    COMMAND(GET_TIME, actionGetTime), // define this first to minimize delays, since this command is time sensitive
     COMMAND(START, actionStart),
     COMMAND(STOP, actionStop),
     COMMAND(REWIND, actionRewind),
     COMMAND(AUTO_HOME, actionAutoHome),
     COMMAND(SET_MIN_OPENING, actionSetMinOpening),
     COMMAND(SET_MAX_OPENING, actionSetMaxOpening),
+    COMMAND(SET_PLAN_TIMES, actionSetPlanTimes),
     COMMAND(SAVE_CONFIG, actionSaveConfig),
     NULL_COMMAND
 };
@@ -95,8 +124,9 @@ void UsbControl::loop(long timeleft) {
 void UsbControl::processLine() {
     const Command *pCmd = Commands;
     while(pCmd->action) {
-        int res = strcmp_P(buffer, pCmd->command);
-        if(res == 0 || (res > 0 && buffer[pCmd->len] == ' ')) {
+        int res = strncmp_P(buffer, pCmd->command, pCmd->len);
+        char delim = buffer[pCmd->len];
+        if(res == 0 && (delim == ' ' || delim =='\0')) {
             pCmd->action(buffer + pCmd->len);
             return;
         }

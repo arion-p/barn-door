@@ -36,6 +36,7 @@
 
 #include "defines.h"
 #include "events.h"
+#include "settings.h"
 #include "usb_control.h"
 
 #define PREFER_SINE
@@ -49,9 +50,9 @@
 // Assuming you followed the blog linked above, these few variables
 // should be the only things that you need to change in general
 //
-static const float INITIAL_OPENING = 2.1;       // Initial opening of barn doors when switched on 
-                                                // (distance between two pivot points in cm)
-static const float MAXIMUM_OPENING = 16.5;      // Maximum distance to allow barn doors to open (30 deg == 2 hours)
+// static const float INITIAL_OPENING = 2.1;       // Initial opening of barn doors when switched on 
+//                                                 // (distance between two pivot points in cm)
+// static const float MAXIMUM_OPENING = 16.5;      // Maximum distance to allow barn doors to open (30 deg == 2 hours)
 
 // Nothing below this line should require changing unless your barndoor
 // is not an Isoceles mount, or you changed the electrical circuit design
@@ -486,8 +487,6 @@ void state_off_enter(void)
     Serial.print("# Enter off\n");
 #endif
     motor_stop();
-
-    //motor->addQueueStepperStop();
 }
 
 void state_off_update(void)
@@ -547,7 +546,10 @@ void poll_switches(void) {
     EndLimit.poll();
 }
 
-
+void init_vars() {
+    offsetPositionUSteps = distance_to_usteps(InitialOpening);
+    maximumPositionUSteps = distance_to_usteps(MaximumOpening);
+}
 
 // A finite state machine with 3 states - sidereal, highspeed and off
 static State stateSidereal(state_sidereal_enter, state_sidereal_update, state_sidereal_exit);
@@ -555,20 +557,18 @@ static State stateHighspeed(state_highspeed_enter, state_highspeed_update, state
 static State stateOff(state_off_enter, state_off_update, state_off_exit);
 Fsm barndoor(&stateOff);
 
+
+
 // Global initialization when first turned off
 void setup(void)
 {
+    readSettings();
     engine.init();
     motor->setDirectionPin(PIN_OUT_DIRECTION);
     motor->setEnablePin(PIN_OUT_ENABLE);
     motor->setAutoEnable(true);
     motor->setAcceleration(MOTOR_USTEPS_ACCELERATION);
     motor->setSpeed(MOTOR_MAX_USTEPS_SPEED);
-    
-    // offsetPositionUSteps = angle_to_usteps(INITIAL_ANGLE);
-    // maximumPositionUSteps = angle_to_usteps(MAXIMUM_ANGLE);
-    offsetPositionUSteps = distance_to_usteps(INITIAL_OPENING);
-    maximumPositionUSteps = distance_to_usteps(MAXIMUM_OPENING);
 
     barndoor.add_transition(&stateOff, &stateSidereal, EVENT_START_BUTTON, NULL);
     barndoor.add_transition(&stateOff, &stateHighspeed, EVENT_REWIND_BUTTON, NULL);
@@ -582,6 +582,7 @@ void setup(void)
 
     barndoor.add_transition(&stateOff, &stateOff, EVENT_AUTO_HOME, auto_home_motor);
 
+    init_vars();    
     auto_home_motor();
 #if defined(DEBUG) || defined(USB_CONTROL)
 //#ifdef DEBUG 
