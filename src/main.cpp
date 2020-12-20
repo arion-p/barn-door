@@ -143,7 +143,7 @@ static const float LAMBDA = 2 * PI / (1000.0 * SIDE_REAL_SECS); // ms to angle f
 // Setup motor class with parameters targetting an DRV8825 board
 
 FastAccelStepperEngine engine = FastAccelStepperEngine();
-FastAccelStepper *motor = engine.stepperA();
+FastAccelStepper *motor = engine.stepperConnectToPin(pinOutStep);
 
 Switch StartButton(pinInStart);
 Switch StopButton(pinInStop);
@@ -404,7 +404,7 @@ void apply_tracking(long currentWallClockMs)
 #endif
 
     if (motor_position_at_queue_end() >= maximumPositionUSteps) {
-        if (motor->isStopped()) {
+        if (!motor->isRunning()) {
             barndoor.trigger(END_SWITCH);
         }
     } else {

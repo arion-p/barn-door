@@ -1,4 +1,4 @@
-#ifndef TEST
+#if defined(ARDUINO_ARCH_ESP32) || defined(ARDUINO_ARCH_AVR)
 #include <Arduino.h>
 #endif
 #include <stdint.h>
@@ -19,20 +19,27 @@
 #define fas_queue_A fas_queue[0]
 #define fas_queue_B fas_queue[1]
 #define QUEUE_LEN 16
-#endif
-#if defined(ARDUINO_ARCH_AVR)
+#elif defined(ARDUINO_ARCH_AVR)
 #define NUM_QUEUES 2
 #define fas_queue_A fas_queue[0]
 #define fas_queue_B fas_queue[1]
 #define QUEUE_LEN 16
-#endif
-#if defined(ARDUINO_ARCH_ESP32)
+#elif defined(ARDUINO_ARCH_ESP32)
+#define NUM_QUEUES 6
+#define QUEUE_LEN 32
+#else
 #define NUM_QUEUES 6
 #define QUEUE_LEN 32
 #endif
 
 // These variables control the stepper timing behaviour
 #define QUEUE_LEN_MASK (QUEUE_LEN - 1)
+
+#ifndef TEST
+#define inject_fill_interrupt(x)
+#endif
+
+#define TICKS_FOR_STOPPED_MOTOR 0xffffffff
 
 #if defined(ARDUINO_ARCH_ESP32)
 #include <driver/mcpwm.h>
@@ -42,7 +49,6 @@
 #include <soc/pcnt_reg.h>
 #include <soc/pcnt_struct.h>
 struct mapping_s {
-  mcpwm_dev_t* mcpwm_dev;
   mcpwm_unit_t mcpwm_unit;
   uint8_t timer;
   mcpwm_io_signals_t pwm_output_pin;
@@ -61,10 +67,11 @@ struct queue_entry {
 class StepperQueue {
  public:
   struct queue_entry entry[QUEUE_LEN];
-  uint8_t read_ptr;  // ISR stops if readptr == next_writeptr
-  uint8_t next_write_ptr;
-  uint8_t autoEnablePin;
+  uint8_t read_idx;  // ISR stops if readptr == next_writeptr
+  uint8_t next_write_idx;
+  uint32_t on_delay_ticks;
   uint8_t dirPin;
+  bool dirHighCountsUp;
   bool isRunning;
 #if defined(ARDUINO_ARCH_ESP32)
   const struct mapping_s* mapping;
@@ -77,28 +84,57 @@ class StepperQueue {
   uint8_t skip;
   uint16_t period;
 #endif
+#if (TEST_CREATE_QUEUE_CHECKSUM == 1)
+  uint8_t checksum;
+#endif
 
-  bool dir_high_at_queue_end;  // direction high corresponds to position
-                               // counting upwards
-  int32_t pos_at_queue_end;    // in steps
-  int32_t ticks_at_queue_end;  // in timer ticks, 0 on stopped stepper
+  bool dir_at_queue_end;
+  int32_t pos_at_queue_end;     // in steps
+  uint32_t ticks_at_queue_end;  // in timer ticks, 0 on stopped stepper
 
   void init(uint8_t queue_num, uint8_t step_pin);
-  bool isQueueFull() {
-    return (((next_write_ptr + 1) & QUEUE_LEN_MASK) == read_ptr);
+  inline bool isQueueFull() {
+    noInterrupts();
+    uint8_t rp = read_idx;
+    uint8_t wp = next_write_idx;
+    interrupts();
+    rp += QUEUE_LEN;
+    return (wp == rp);
   }
-  bool isQueueEmpty() { return (read_ptr == next_write_ptr); }
-  bool isStopped() { return ticks_at_queue_end == 0; }
-  void addQueueStepperStop() { ticks_at_queue_end = 0; }
-  int addQueueEntry(uint32_t ticks, uint8_t steps, bool dir_high) {
-    int32_t c_sum = 0;
+  inline bool isQueueEmpty() {
+    noInterrupts();
+    bool res = (next_write_idx == read_idx);
+    interrupts();
+    inject_fill_interrupt(0);
+    return res;
+  }
+  int addQueueEntry(uint32_t ticks, uint8_t steps, bool dir) {
     if (steps >= 128) {
+      return AQE_STEPS_ERROR;
+    }
+    if (steps == 0) {
       return AQE_STEPS_ERROR;
     }
     if (ticks > ABSOLUTE_MAX_TICKS) {
       return AQE_TOO_HIGH;
     }
 
+    if (!isRunning) {
+      if (on_delay_ticks > 0) {
+        int res = _addQueueEntry(on_delay_ticks, 1, dir);
+        if ((res != AQE_OK) || (steps == 1)) {
+          return res;
+        }
+        steps -= 1;
+      }
+    }
+    return _addQueueEntry(ticks, steps, dir);
+  }
+
+  int _addQueueEntry(uint32_t ticks, uint8_t steps, bool dir) {
+    if (isQueueFull()) {
+      return AQE_FULL;
+    }
     uint16_t period;
     uint8_t n_periods;
     if (ticks > 65535) {
@@ -114,61 +150,60 @@ class StepperQueue {
       n_periods = 0;
     }
 
-    uint8_t wp = next_write_ptr;
-    uint8_t rp = read_ptr;
-    struct queue_entry* e = &entry[wp];
-
-    uint8_t next_wp = (wp + 1) & QUEUE_LEN_MASK;
-    if (next_wp != rp) {
-      pos_at_queue_end += dir_high ? steps : -steps;
-      ticks_at_queue_end = ticks;
-      steps <<= 1;
-      e->period = period;
-      e->n_periods = n_periods;
-      e->steps = (dir_high != dir_high_at_queue_end) ? steps | 0x01 : steps;
-      dir_high_at_queue_end = dir_high;
+    uint8_t wp = next_write_idx;
+    struct queue_entry* e = &entry[wp & QUEUE_LEN_MASK];
+    pos_at_queue_end += (dir == dirHighCountsUp) ? steps : -steps;
+    ticks_at_queue_end = ticks;
+    steps <<= 1;
+    e->period = period;
+    e->n_periods = n_periods;
+    // check for dir pin value change
+    e->steps = (dir != dir_at_queue_end) ? steps | 0x01 : steps;
+    dir_at_queue_end = dir;
 #if (TEST_CREATE_QUEUE_CHECKSUM == 1)
-      {
-        unsigned char* x = (unsigned char*)e;
-        for (uint8_t i = 0; i < sizeof(struct queue_entry); i++) {
-          if (checksum & 0x80) {
-            checksum <<= 1;
-            checksum ^= 0xde;
-          } else {
-            checksum <<= 1;
-          }
-          checksum ^= *x++;
+    {
+      // checksum is in the struct and will updated here
+      unsigned char* x = (unsigned char*)e;
+      for (uint8_t i = 0; i < sizeof(struct queue_entry); i++) {
+        if (checksum & 0x80) {
+          checksum <<= 1;
+          checksum ^= 0xde;
+        } else {
+          checksum <<= 1;
         }
+        checksum ^= *x++;
       }
-#endif
-      noInterrupts();
-      if (isRunning) {
-        next_write_ptr = next_wp;
-        interrupts();
-      } else {
-        interrupts();
-        if (!startQueue(e)) {
-          next_write_ptr = next_wp;
-        }
-      }
-
-      return AQE_OK;
     }
-    return AQE_FULL;
+#endif
+    wp++;
+    noInterrupts();
+    if (isRunning) {
+      next_write_idx = wp;
+      interrupts();
+    } else {
+      interrupts();
+      if (!startQueue(e)) {
+        next_write_idx = wp;
+      }
+    }
+    return AQE_OK;
   }
 
- private:
   bool startQueue(struct queue_entry* e);
   void _initVars() {
-    dirPin = 255;
-    autoEnablePin = 255;
-    read_ptr = 0;
-    next_write_ptr = 0;
-    dir_high_at_queue_end = true;
+    dirPin = PIN_UNDEFINED;
+    on_delay_ticks = 0;
+    read_idx = 0;
+    next_write_idx = 0;
+    dir_at_queue_end = true;
+    dirHighCountsUp = true;
     pos_at_queue_end = 0;
-    ticks_at_queue_end = 0;
+    ticks_at_queue_end = TICKS_FOR_STOPPED_MOTOR;
     isRunning = false;
+#if (TEST_CREATE_QUEUE_CHECKSUM == 1)
+    checksum = 0;
+#endif
   }
 };
 
-extern struct StepperQueue fas_queue[NUM_QUEUES];
+extern StepperQueue fas_queue[NUM_QUEUES];

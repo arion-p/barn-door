@@ -15,7 +15,6 @@ StepperQueue fas_queue[NUM_QUEUES];
 // Here the associated mapping from queue to mcpwm/pcnt units
 static const struct mapping_s queue2mapping[NUM_QUEUES] = {
     {
-      mcpwm_dev : &MCPWM0,
       mcpwm_unit : MCPWM_UNIT_0,
       timer : 0,
       pwm_output_pin : MCPWM0A,
@@ -25,7 +24,6 @@ static const struct mapping_s queue2mapping[NUM_QUEUES] = {
       timer_tez_int_ena : MCPWM_TIMER0_TEZ_INT_ENA
     },
     {
-      mcpwm_dev : &MCPWM0,
       mcpwm_unit : MCPWM_UNIT_0,
       timer : 1,
       pwm_output_pin : MCPWM1A,
@@ -35,7 +33,6 @@ static const struct mapping_s queue2mapping[NUM_QUEUES] = {
       timer_tez_int_ena : MCPWM_TIMER1_TEZ_INT_ENA
     },
     {
-      mcpwm_dev : &MCPWM0,
       mcpwm_unit : MCPWM_UNIT_0,
       timer : 2,
       pwm_output_pin : MCPWM2A,
@@ -45,7 +42,6 @@ static const struct mapping_s queue2mapping[NUM_QUEUES] = {
       timer_tez_int_ena : MCPWM_TIMER2_TEZ_INT_ENA
     },
     {
-      mcpwm_dev : &MCPWM1,
       mcpwm_unit : MCPWM_UNIT_1,
       timer : 0,
       pwm_output_pin : MCPWM0A,
@@ -55,7 +51,6 @@ static const struct mapping_s queue2mapping[NUM_QUEUES] = {
       timer_tez_int_ena : MCPWM_TIMER0_TEZ_INT_ENA
     },
     {
-      mcpwm_dev : &MCPWM1,
       mcpwm_unit : MCPWM_UNIT_1,
       timer : 1,
       pwm_output_pin : MCPWM1A,
@@ -65,7 +60,6 @@ static const struct mapping_s queue2mapping[NUM_QUEUES] = {
       timer_tez_int_ena : MCPWM_TIMER1_TEZ_INT_ENA
     },
     {
-      mcpwm_dev : &MCPWM1,
       mcpwm_unit : MCPWM_UNIT_1,
       timer : 2,
       pwm_output_pin : MCPWM2A,
@@ -78,7 +72,8 @@ static const struct mapping_s queue2mapping[NUM_QUEUES] = {
 
 void IRAM_ATTR next_command(StepperQueue *queue, struct queue_entry *e) {
   const struct mapping_s *mapping = queue->mapping;
-  mcpwm_dev_t *mcpwm = mapping->mcpwm_dev;
+  mcpwm_unit_t mcpwm_unit = mapping->mcpwm_unit;
+  mcpwm_dev_t *mcpwm = mcpwm_unit == MCPWM_UNIT_0 ? &MCPWM0 : &MCPWM1;
   uint8_t timer = mapping->timer;
   mcpwm->timer[timer].period.period = e->period;
   uint8_t steps = e->steps;
@@ -102,23 +97,22 @@ void IRAM_ATTR next_command(StepperQueue *queue, struct queue_entry *e) {
 
 static void IRAM_ATTR pcnt_isr_service(void *arg) {
   StepperQueue *q = (StepperQueue *)arg;
-  uint8_t rp = q->read_ptr;
-  if (rp != q->next_write_ptr) {
-    struct queue_entry *e = &q->entry[rp];
-    rp = (rp + 1) & QUEUE_LEN_MASK;
-    q->read_ptr = rp;
+  uint8_t rp = q->read_idx;
+  if (rp != q->next_write_idx) {
+    struct queue_entry *e = &q->entry[rp & QUEUE_LEN_MASK];
+    rp++;
+    q->read_idx = rp;
     next_command(q, e);
   } else {
     // no more commands: stop timer at period end
     const struct mapping_s *mapping = q->mapping;
-    mcpwm_dev_t *mcpwm = mapping->mcpwm_dev;
+    mcpwm_unit_t mcpwm_unit = mapping->mcpwm_unit;
+    mcpwm_dev_t *mcpwm = mcpwm_unit == MCPWM_UNIT_0 ? &MCPWM0 : &MCPWM1;
     uint8_t timer = mapping->timer;
     mcpwm->timer[timer].mode.start = 1;           // stop at TEP
     mcpwm->channel[timer].generator[0].utez = 1;  // low at zero
     q->isRunning = false;
-    if (q->autoEnablePin != 255) {
-      digitalWrite(q->autoEnablePin, HIGH);
-    }
+    q->ticks_at_queue_end = TICKS_FOR_STOPPED_MOTOR;
   }
 }
 
@@ -154,8 +148,8 @@ void StepperQueue::init(uint8_t queue_num, uint8_t step_pin) {
   mapping = &queue2mapping[queue_num];
   isRunning = false;
 
-  mcpwm_dev_t *mcpwm = mapping->mcpwm_dev;
   mcpwm_unit_t mcpwm_unit = mapping->mcpwm_unit;
+  mcpwm_dev_t *mcpwm = mcpwm_unit == MCPWM_UNIT_0 ? &MCPWM0 : &MCPWM1;
   pcnt_unit_t pcnt_unit = mapping->pcnt_unit;
   uint8_t timer = mapping->timer;
 
@@ -183,16 +177,7 @@ void StepperQueue::init(uint8_t queue_num, uint8_t step_pin) {
   pcnt_isr_handler_add(pcnt_unit, pcnt_isr_service, (void *)this);
 
   mcpwm_gpio_init(mcpwm_unit, mapping->pwm_output_pin, step_pin);
-  switch (timer) {
-    case 0:
-      break;
-    case 1:
-      mcpwm_gpio_init(mcpwm_unit, MCPWM1A, step_pin);
-      break;
-    case 2:
-      mcpwm_gpio_init(mcpwm_unit, MCPWM2A, step_pin);
-      break;
-  }
+
   if (timer == 0) {
     // Init mcwpm module for use
     periph_module_enable(mcpwm_unit == MCPWM_UNIT_0 ? PERIPH_PWM0_MODULE
@@ -245,7 +230,8 @@ void StepperQueue::init(uint8_t queue_num, uint8_t step_pin) {
 // period
 
 bool StepperQueue::startQueue(struct queue_entry *e) {
-  mcpwm_dev_t *mcpwm = mapping->mcpwm_dev;
+  mcpwm_unit_t mcpwm_unit = mapping->mcpwm_unit;
+  mcpwm_dev_t *mcpwm = mcpwm_unit == MCPWM_UNIT_0 ? &MCPWM0 : &MCPWM1;
   uint8_t timer = mapping->timer;
 
   // timer should be either at TEP or at zero
@@ -262,10 +248,6 @@ bool StepperQueue::startQueue(struct queue_entry *e) {
   }
 
   next_command(this, e);
-
-  if (autoEnablePin != 255) {
-    digitalWrite(autoEnablePin, LOW);
-  }
   return true;
 }
 #endif
