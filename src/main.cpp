@@ -606,6 +606,9 @@ void loop(void)
     if (StopButton.pushed()) {
         barndoor.trigger(EVENT_STOP_BUTTON);
     }
+    if(StopButton.longPress()) {
+        barndoor.trigger(EVENT_AUTO_HOME);
+    }
     
     if(StartLimit.pushed()) {
         barndoor.trigger(EVENT_START_SWITCH);
