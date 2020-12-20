@@ -33,3 +33,6 @@ static const float BASE_LEN_LOWER_CM = 28;      // Length from hinge to center o
 #define PIN_IN_START_LIMIT  A4
 #define PIN_IN_END_LIMIT    A5
 #endif
+
+// Timing
+#define DEFAULT_PLANAHEAD_TIME      15000L

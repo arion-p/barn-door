@@ -57,9 +57,6 @@
 // Nothing below this line should require changing unless your barndoor
 // is not an Isoceles mount, or you changed the electrical circuit design
 
-#define REPLAN_INTERVAL     5000L
-#define PLANAHEAD_TIME      15000L
-
 #define TICKS_PER_MS        (F_CPU / 1000L)
 
 // Derived constants
@@ -140,22 +137,15 @@ UsbControl usbControl;
 long time_to_usteps(long ms)
 {
     return (long)(sqrt(ALPHA2 * square(sin(ms * LAMBDA)) + BETA2));
-
-    // return (long)(USTEPS_PER_ROTATION *
-    //               THREADS_PER_CM * 
-    //               sqrt(ALPHA * square(sin(ms * LAMBDA)) + BETA));
 }
 
 // Given total number of steps from 100% closed position, figure out
-// the corresponding total tracking time in seconds
+// the corresponding total tracking time in ms
 long usteps_to_time(long usteps)
 {
     return (long)(
       asin(sqrt((square((float)usteps) - BETA2) / ALPHA2)) *
       1000.0 * SIDE_REAL_SECS / PI);
-    // return (long)(
-    //   asin(sqrt((square(usteps / USTEPS_PER_CM) - BETA) / ALPHA)) *
-    //   1000.0 * SIDE_REAL_SECS / PI);
 }
 #else
 
@@ -171,7 +161,7 @@ long time_to_usteps(long ms)
 }
 
 // Given total number of steps from 100% closed position, figure out
-// the corresponding total tracking time in seconds
+// the corresponding total tracking time in ms
 long usteps_to_time(long usteps)
 {
     return (long)(
@@ -210,7 +200,7 @@ static long startPositionUSteps;
 static long startPositionMs;
 // Wall clock time at the point the motor switched from
 // stopped to running.
-static long startWallClockMs;
+// static long startWallClockMs;
 
 
 // These variables are used while running to calculate our
@@ -218,7 +208,7 @@ static long startWallClockMs;
 
 // The wall clock time where we need to next calculate tracking
 // rate / target
-static long targetWallClockMs;
+// static long targetWallClockMs;
 // Total tracking time associated with our target point
 static long targetPositionMs;
 // Total motor steps associated with target point
@@ -230,13 +220,13 @@ static long stepTime;
 // used to distribute the remaining ticks between steps
 // number of steps in the plan
 static long deltaSteps;
-// number of ectra ticks to distribute
+// number of extra ticks to distribute
 static long deltaTicks;
 // the cumulative error multiplied by 2*deltaSteps
 static long ticksError;
 
-static float minSpeed;
-static float maxSpeed;
+// static float minSpeed;
+// static float maxSpeed;
 
 // The logical motor position which takes into account the
 // fact that we have an initial opening angle
@@ -291,11 +281,11 @@ void start_tracking(void)
     startPositionMs = usteps_to_time(startPositionUSteps);
     targetPositionMs = startPositionMs;
     targetPositionUSteps = startPositionUSteps;
-    startWallClockMs = millis();
-    targetWallClockMs = startWallClockMs;
+    // startWallClockMs = millis();
+    // targetWallClockMs = startWallClockMs;
 
-    minSpeed = 0;
-    maxSpeed = 0;
+    // minSpeed = 0;
+    // maxSpeed = 0;
 
 #ifdef DEBUG
     Serial.print("# Enter sidereal\n");
@@ -305,8 +295,8 @@ void start_tracking(void)
     Serial.print(startPositionUSteps);
     Serial.print(", start pos ms: ");
     Serial.print(startPositionMs);
-    Serial.print(", start wclk ms: ");
-    Serial.print(startWallClockMs);
+    // Serial.print(", start wclk ms: ");
+    // Serial.print(startWallClockMs);
     Serial.print("\n\n");
 #endif
 }
@@ -320,16 +310,15 @@ void start_tracking(void)
 //
 // So we set our target values to what we expect them all to be
 // 15 seconds  in the future
-void plan_tracking(long currentWallClockMs)
+void plan_tracking()
 {
     long current_position = motor_position();
     //targetWallClockMs = targetWallClockMs + PLANAHEAD_TIME;
-    targetWallClockMs = currentWallClockMs + PLANAHEAD_TIME;
     //long newTargetPositionMs = startPositionMs + (targetWallClockMs - startWallClockMs);
-    long newTargetPositionMs = targetPositionMs + PLANAHEAD_TIME;
+    long newTargetPositionMs = targetPositionMs + PlanAheadTrueTimeMs;
     long newTargetPositionUSteps = time_to_usteps(newTargetPositionMs);
     deltaSteps = newTargetPositionUSteps - targetPositionUSteps;
-    deltaTicks = TICKS_PER_MS * (newTargetPositionMs - targetPositionMs);
+    deltaTicks = TICKS_PER_MS * PlanAheadSysTimeMs;
     stepTime = deltaTicks / deltaSteps;
     deltaTicks -= stepTime * deltaSteps;
     ticksError = 0;
@@ -346,12 +335,10 @@ void plan_tracking(long currentWallClockMs)
     Serial.print(targetPositionUSteps);
     Serial.print(", target pos ms: ");
     Serial.print(targetPositionMs);
-    Serial.print(", target wclk ms: ");
-    Serial.print(targetWallClockMs);
     Serial.print("\n");
 #endif
-    minSpeed = 200;
-    maxSpeed = 0;
+    // minSpeed = 200;
+    // maxSpeed = 0;
 }
 
 
@@ -365,7 +352,7 @@ void plan_tracking(long currentWallClockMs)
 // By re-calculating rate of steps on every iteration, we are
 // self-correcting if we are not invoked by the arduino at a
 // constant rate
-void apply_tracking(long currentWallClockMs)
+void apply_tracking()
 {
  
 #ifdef DEBUG32
@@ -390,7 +377,7 @@ void apply_tracking(long currentWallClockMs)
         if(!motor->isQueueFull()) {
 
             if(motor_position_at_queue_end() >= targetPositionUSteps) {
-                plan_tracking(currentWallClockMs);
+                plan_tracking();
             }
 
             // Line drawing algorithm used to distribute extra ticks evenly between steps
@@ -412,7 +399,7 @@ void apply_tracking(long currentWallClockMs)
 void state_sidereal_enter(void)
 {
     start_tracking();
-    plan_tracking(startWallClockMs);
+    plan_tracking();
 }
 
 
@@ -424,13 +411,7 @@ void state_sidereal_enter(void)
 // tracking rate perhaps ?
 void state_sidereal_update(void)
 {
-    long currentWallClockMs = millis();
-
-    // if (currentWallClockMs >= targetWallClockMs - REPLAN_INTERVAL) {
-    //     plan_tracking(currentWallClockMs);
-    // }
-
-    apply_tracking(currentWallClockMs);
+    apply_tracking();
 }
 
 void state_sidereal_exit(void)

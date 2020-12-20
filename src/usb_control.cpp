@@ -34,24 +34,30 @@ void actionAutoHome(char *p) {
 }
 
 void actionSetMinOpening(char *p) {
-    float newMinOpening;
-    if(EOF != sscanf(p, "%f", &newMinOpening))
+    char *end;
+    float newMinOpening = strtod(p, &end);
+    if(end == p || *end != 0)
     {
         InitialOpening = newMinOpening;
         init();
+        Serial.print(F(">OK\r"));
+    } else {
+        Serial.print(F(">ERR: INVALID PARAMETER\r"));
     }
-    Serial.print(F(">OK\r"));
 }
 
 
 void actionSetMaxOpening(char *p) {
-    float newMaxOpening;
-    if(EOF != sscanf(p, "%f", &newMaxOpening))
+    char *end;
+    float newMaxOpening = strtod(p, &end);
+    if(end == p || *end != 0)
     {
         MaximumOpening = newMaxOpening;
         init();
-     }
-    Serial.print(F(">OK\r"));
+        Serial.print(F(">OK\r"));
+    } else {
+        Serial.print(F(">ERR: INVALID PARAMETER\r"));
+    }
 }
 
 void actionGetTime(char *p) {
@@ -61,7 +67,15 @@ void actionGetTime(char *p) {
 }
 
 void actionSetPlanTimes(char *p) {
-    Serial.print(F(">ERR: NOT SUPPORTED\r"));
+    long trueTime;
+    long sysTime;
+    if(2 == sscanf(p, "%ld,%ld", &trueTime, &sysTime)){
+        PlanAheadTrueTimeMs = trueTime;
+        PlanAheadSysTimeMs = sysTime;
+        Serial.print(F(">OK\r"));
+    } else {
+        Serial.print(F(">ERR: INVALID PARAMETER\r"));
+    }
 }
 
 void actionSaveConfig(char *p) {
