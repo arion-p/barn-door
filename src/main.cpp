@@ -403,6 +403,9 @@ void apply_tracking(long currentWallClockMs)
     Serial.print("\n");
 #endif
 
+    struct stepper_command_s cmd = {
+        .ticks = 0, .steps = 1, .count_up = true};
+
     if (motor_position_at_queue_end() >= maximumPositionUSteps) {
         if (!motor->isRunning()) {
             barndoor.trigger(END_SWITCH);
@@ -422,7 +425,8 @@ void apply_tracking(long currentWallClockMs)
                 ticksError -= 2 * deltaSteps;
                 ticks++;
             }
-            motor->addQueueEntry(ticks, 1, true);
+            cmd.ticks = ticks;
+            motor->addQueueEntry(&cmd);
         }
     }
 }
@@ -527,24 +531,35 @@ void auto_home_motor(void) {
         Serial.print("# Auto homing...");
     #endif
     // Move motor to home position until Start limit switch is activated
+        
     StartLimit.poll();
     motor->enableOutputs();
-    while(!StartLimit.on()) {
-        if (!motor->isQueueFull()) motor->addQueueEntry(MOTOR_SLOW_SPEED_USTEPS, 1, false);
-        StartLimit.poll();
+    {
+        struct stepper_command_s cmd = {
+            .ticks = MOTOR_SLOW_SPEED_USTEPS, .steps = 1, .count_up = false};
+
+        while(!StartLimit.on()) {
+            if (!motor->isQueueFull()) motor->addQueueEntry(&cmd);
+            StartLimit.poll();
+        }
     }
 
     #ifdef DEBUG
         Serial.print("backing up...");
     #endif
-    // Back up slowly until Start limit switch is released
-    while(StartLimit.on()) {
-        if (motor->isQueueEmpty()) motor->addQueueEntry(MOTOR_VERY_SLOW_SPEED_USTEPS, 1, true);
-        StartLimit.poll();
-    }
+    {
+        // Back up slowly until Start limit switch is released
+        struct stepper_command_s cmd = {
+            .ticks = MOTOR_VERY_SLOW_SPEED_USTEPS, .steps = 1, .count_up = true};
+
+        while(StartLimit.on()) {
+            if (motor->isQueueEmpty()) motor->addQueueEntry(&cmd);
+            StartLimit.poll();
+        }
+     }
 
     // Stop motor. It is now homed
-    motor->setPositionAfterCommandsCompleted(0);
+    motor->setCurrentPosition(0);
     #ifdef DEBUG
         Serial.print("done.\n");
     #endif
