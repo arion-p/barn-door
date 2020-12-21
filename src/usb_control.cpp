@@ -97,6 +97,8 @@ DEF_COMMAND(SET_MAX_OPENING);
 DEF_COMMAND(SET_PLAN_TIMES);
 DEF_COMMAND(SAVE_CONFIG);
 
+// Commands are scanned using linear search in the following array
+// Place more common or more time sensitive commands first
 const Command Commands[] = {
     COMMAND(GET_TIME, actionGetTime), // define this first to minimize delays, since this command is time sensitive
     COMMAND(START, actionStart),

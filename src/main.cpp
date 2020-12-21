@@ -45,15 +45,6 @@
 // it seriously slows down the main loop causing tracking errors
 #define DEBUG
 
-// Constants to set based on hardware construction specs
-//
-// Assuming you followed the blog linked above, these few variables
-// should be the only things that you need to change in general
-//
-// static const float INITIAL_OPENING = 2.1;       // Initial opening of barn doors when switched on 
-//                                                 // (distance between two pivot points in cm)
-// static const float MAXIMUM_OPENING = 16.5;      // Maximum distance to allow barn doors to open (30 deg == 2 hours)
-
 // Nothing below this line should require changing unless your barndoor
 // is not an Isoceles mount, or you changed the electrical circuit design
 
@@ -186,7 +177,6 @@ long distance_to_usteps(float distance)
 // These variables are initialized when the motor switches
 // from stopped to running, so we know our starting conditions
 
-
 // If the barn door doesn't go to 100% closed, this records
 // the inital offset we started from for INITIAL_ANGLE
 static long offsetPositionUSteps;
@@ -198,17 +188,10 @@ static long maximumPositionUSteps;
 static long startPositionUSteps;
 // Total tracking time associated with total motor steps
 static long startPositionMs;
-// Wall clock time at the point the motor switched from
-// stopped to running.
-// static long startWallClockMs;
-
 
 // These variables are used while running to calculate our
 // constantly changing targets
 
-// The wall clock time where we need to next calculate tracking
-// rate / target
-// static long targetWallClockMs;
 // Total tracking time associated with our target point
 static long targetPositionMs;
 // Total motor steps associated with target point
@@ -224,9 +207,6 @@ static long deltaSteps;
 static long deltaTicks;
 // the cumulative error multiplied by 2*deltaSteps
 static long ticksError;
-
-// static float minSpeed;
-// static float maxSpeed;
 
 // The logical motor position which takes into account the
 // fact that we have an initial opening angle
@@ -310,11 +290,9 @@ void start_tracking(void)
 //
 // So we set our target values to what we expect them all to be
 // 15 seconds  in the future
-void plan_tracking()
+void plan_tracking(void)
 {
     long current_position = motor_position();
-    //targetWallClockMs = targetWallClockMs + PLANAHEAD_TIME;
-    //long newTargetPositionMs = startPositionMs + (targetWallClockMs - startWallClockMs);
     long newTargetPositionMs = targetPositionMs + PlanAheadTrueTimeMs;
     long newTargetPositionUSteps = time_to_usteps(newTargetPositionMs);
     deltaSteps = newTargetPositionUSteps - targetPositionUSteps;
@@ -337,8 +315,6 @@ void plan_tracking()
     Serial.print(targetPositionMs);
     Serial.print("\n");
 #endif
-    // minSpeed = 200;
-    // maxSpeed = 0;
 }
 
 
@@ -416,7 +392,6 @@ void state_sidereal_update(void)
 
 void state_sidereal_exit(void)
 {
-    // nada
     motor_stop();
 }
 
@@ -433,7 +408,7 @@ void state_highspeed_enter(void)
 
 // Called on every iteration when in non-tracking highspeed
 // forward/back mode. Will automatically step when it
-// hits the 100% closed position to avoid straining
+// hits the maximum or minimum opening to avoid straining
 // the motor
 void state_highspeed_update(void)
 {
@@ -441,14 +416,12 @@ void state_highspeed_update(void)
     // of motion
     if (digitalRead(PIN_IN_DIRECTION)) {
         if (motor_position() >= maximumPositionUSteps) {
-            //motor->addQueueStepperStop();
             barndoor.trigger(EVENT_END_SWITCH);
         } else {
             motor_moveTo(maximumPositionUSteps);
         }
     } else {
         if (motor_position() <= offsetPositionUSteps) {
-            //motor->addQueueStepperStop();
             barndoor.trigger(EVENT_START_SWITCH);
         } else {
             motor_moveTo(offsetPositionUSteps);
@@ -458,7 +431,6 @@ void state_highspeed_update(void)
 
 void state_highspeed_exit(void)
 {
-    // nada
     motor_stop();
 }
 
@@ -484,8 +456,8 @@ void auto_home_motor(void) {
     #ifdef DEBUG
         Serial.print("# Auto homing...");
     #endif
+
     // Move motor to home position until Start limit switch is activated
-        
     StartLimit.poll();
     motor->enableOutputs();
     {
@@ -566,7 +538,6 @@ void setup(void)
     init_vars();    
     auto_home_motor();
 #if defined(DEBUG) || defined(USB_CONTROL)
-//#ifdef DEBUG 
     Serial.begin(115200);
 #endif
 }
@@ -575,9 +546,6 @@ void loop(void)
 {
     long endTime = millis() + 8;
     poll_switches();
-    // pinInSidereal/pinInHighspeed are two poles of a 3-position
-    // switch, that let us choose between sidereal tracking,
-    // stopped and highspeed mode
     if (StartButton.pushed()) {
         barndoor.trigger(EVENT_START_BUTTON);
     }
